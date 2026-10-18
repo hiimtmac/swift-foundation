@@ -787,9 +787,12 @@ extension JSONParserDecoder {
                     } else if _fastPath(digit >= _a && digit < lowercaseUpperBound) {
                         digitValue = Result(truncatingIfNeeded: digit &- _a &+ 10)
                     } else {
-                        // TODO: Meh `!`
+                        // The first non-hex byte may end in the middle of a UTF-8 scalar,
+                        // even when the complete input is valid UTF-8. Reporting malformed
+                        // syntax must not trap while constructing its diagnostic.
                         let hexString = String._tryFromUTF8(self.bytes.extracting(unchecked: startOffset ..< self.readOffset))
-                        throw .invalidHexDigitSequence(hexString!, location: .countingLinesAndColumns(upTo: startOffset, in: self.bytes))
+                            ?? "<invalid UTF-8 fragment>"
+                        throw .invalidHexDigitSequence(hexString, location: .countingLinesAndColumns(upTo: startOffset, in: self.bytes))
                     }
 
                     let overflow1: Bool
@@ -1100,7 +1103,9 @@ extension JSONParserDecoder {
                         fallthrough
                     case _0 ..< numericalUpperBound, ._dot, ._plus, ._minus:
                         moveReaderIndex(forwardBy: 1)
-                    default: break
+                    default:
+                        // Leave the delimiter for the surrounding container parser.
+                        return hasExponent
                     }
                 }
                 return hasExponent
@@ -1169,6 +1174,9 @@ extension JSONParserDecoder {
 
                         // We overflowed, but if this is actually a floating point number, then with negative exponents, it could still be represented as this integer type. Scan forward for possible periods in this number.
                         if _scanRestOfNumberFindingExponent() {
+                            // Retry from the first digit, like the non-overflow paths.
+                            // parseInteger restores a consumed minus sign separately.
+                            self.readOffset = startOffset
                             return .retryAsFloatingPoint
                         }
 
